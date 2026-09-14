@@ -44,6 +44,38 @@ jobs:
           cd CoreELEC
           git log -1 --oneline
 
+            - name: Fix GNU source mirrors
+        working-directory: CoreELEC
+        run: |
+          set -e
+
+          echo "=== Replacing broken GNU mirror URLs ==="
+
+          grep -RIl \
+            'https://ftpmirror.gnu.org/' \
+            packages \
+            projects \
+            2>/dev/null |
+          while read -r file; do
+            echo "Patching: $file"
+            sed -i \
+              's#https://ftpmirror.gnu.org/#https://ftp.gnu.org/gnu/#g' \
+              "$file"
+          done
+
+          echo "=== Remaining ftpmirror references ==="
+          grep -Rni \
+            'ftpmirror.gnu.org' \
+            packages \
+            projects \
+            2>/dev/null || true
+
+          echo "=== make package ==="
+          cat packages/devel/make/package.mk
+
+          echo "=== m4 package ==="
+          cat packages/devel/m4/package.mk
+
       - name: Fix m4 source
         working-directory: CoreELEC
         run: |
