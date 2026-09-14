@@ -1,3 +1,4 @@
+ 
 name: CoreELEC 22 Xiaomi reboot fix
 
 on:
@@ -45,75 +46,60 @@ jobs:
           git log -1 --oneline
 
       - name: Fix GNU source mirrors
-            
-        working-directory: CoreELEC      
-        run: |
-          set -e
-
-          echo "=== Replacing broken GNU mirror URLs ==="
-
-          grep -RIl \
-            'https://ftpmirror.gnu.org/' \
-            packages \
-            projects \
-            2>/dev/null |
-          while read -r file; do
-            echo "Patching: $file"
-            sed -i \
-              's#https://ftpmirror.gnu.org/#https://ftp.gnu.org/gnu/#g' \
-              "$file"
-          done
-
-          echo "=== Remaining ftpmirror references ==="
-          grep -Rni \
-            'ftpmirror.gnu.org' \
-            packages \
-            projects \
-            2>/dev/null || true
-
-          echo "=== make package ==="
-          cat packages/devel/make/package.mk
-
-          echo "=== m4 package ==="
-          cat packages/devel/m4/package.mk
-
-      - name: Fix m4 source
         working-directory: CoreELEC
         run: |
           set -e
-
-          echo "=== CoreELEC m4 package ==="
-          M4PKG="packages/devel/m4/package.mk"
-
-          if [ ! -f "$M4PKG" ]; then
-            echo "ERROR: $M4PKG not found"
+          echo "=== Fixing GNU source mirrors ==="
+          grep -RIl 'https://ftpmirror.gnu.org/' packages projects 2>/dev/null | while read -r file; do
+            echo "Patching: $file"
+            sed -i 's#https://ftpmirror.gnu.org/#https://ftp.gnu.org/gnu/#g' "$file"
+          done
+          echo "=== Fixing GMP source ==="
+          GMPPKG="packages/devel/gmp/package.mk"
+          if [ -f "$GMPPKG" ]; then
+            sed -i 's#https://gmplib.org/download/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz#https://ftp.gnu.org/gnu/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz#g' "$GMPPKG"
+            cat "$GMPPKG"
+          else
+            echo "ERROR: $GMPPKG not found"
             exit 1
           fi
 
-          cat "$M4PKG"
+      - name: Fix m4 source
+          working-directory: CoreELEC
+          run: |
+            echo "Searching m4 package..."
+            find packages -path '*m4*' -name 'package.mk' -print
 
-          echo "=== Creating CoreELEC source cache ==="
-          mkdir -p sources/m4
+            M4PKG="$(find packages -path '*m4*' -name 'package.mk' | head -n1)"
 
-          echo "=== Downloading m4-1.4.21 from GNU ==="
-          curl -fL --retry 10 --retry-delay 5 \
-            -o sources/m4/m4-1.4.21.tar.bz2 \
-            https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.bz2
+            if [ -z "$M4PKG" ]; then
+              echo "ERROR: m4 package.mk not found"
+              exit 1
+            fi
 
-          echo "=== Verifying SHA256 ==="
-          echo "dc487e11d2f0c9e01555bb1af26be4eae983ec8f0726746505b4327186eb21fc  sources/m4/m4-1.4.21.tar.bz2" \
-            | sha256sum -c -
+            echo "Using: $M4PKG"
 
-          echo "=== Patching m4 URL ==="
-          sed -i \
-            's#https://ftpmirror.gnu.org/m4/${PKG_NAME}-${PKG_VERSION}.tar.bz2#https://ftp.gnu.org/gnu/m4/${PKG_NAME}-${PKG_VERSION}.tar.bz2#g' \
-            "$M4PKG"
+            sed -i \
+              's#https://ftpmirror.gnu.org/m4/m4-1.4.21.tar.bz2#https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz#g' \
+              "$M4PKG"
 
-          echo "=== Patched m4 package ==="
-          cat "$M4PKG"
+            echo "Updated m4 package:"
+            cat "$M4PKG"
 
-          echo "=== Cached source ==="
-          ls -lh sources/m4/m4-1.4.21.tar.bz2
+            echo "Testing GNU m4 source..."
+            curl -fL --retry 5 --retry-delay 3 \
+              -o /tmp/m4-1.4.21.tar.xz \
+              https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz
+
+            echo "SHA256:"
+            sha256sum /tmp/m4-1.4.21.tar.xz
+
+            echo "Expected:"
+            echo "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66"
+
+            echo "Verifying checksum..."
+            echo "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66  /tmp/m4-1.4.21.tar.xz" \
+              | sha256sum -c -
 
       - name: Apply Xiaomi reboot fix
         working-directory: CoreELEC
@@ -144,7 +130,6 @@ jobs:
           p.write_text(s.replace(old, new))
           PY
 
-          echo "=== Xiaomi reboot fix ==="
           grep -n -A8 -B3 \
             "direct busybox reboot" \
             packages/sysutils/busybox/scripts/fs-resize
@@ -155,7 +140,6 @@ jobs:
         working-directory: CoreELEC
         run: |
           set -o pipefail
-
           PROJECT=Amlogic-ce \
           DEVICE=Amlogic-no \
           ARCH=aarch64 \
@@ -178,5 +162,4 @@ jobs:
             CoreELEC/target/*.kernel
             CoreELEC/target/*.system
             CoreELEC/packages/sysutils/busybox/scripts/fs-resize
-            CoreELEC/packages/devel/m4/package.mk
             build.log
