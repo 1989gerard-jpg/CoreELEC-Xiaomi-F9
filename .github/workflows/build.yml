@@ -1,1 +1,109 @@
 
+name: CoreELEC 22 Xiaomi reboot fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      PROJECT: Amlogic-ce
+      DEVICE: Amlogic-no
+      ARCH: aarch64
+      BUILD_PERIODIC: nightly
+      SUBDEVICE: Generic
+      DTBIMG: s7d_s905x5m_xiaomi_3rd_gen.dtb
+      CONCURRENCY_MAKE_LEVEL: 4
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
+          df -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git python3 bc bzip2 curl diffutils gawk \
+            gcc g++ gperf gzip file patchutils lzop make patch perl \
+            rdfind rsync sed tar unzip xz-utils zip zstd \
+            libncurses5-dev libc6-dev libjson-perl libparse-yapp-perl \
+            libxml-parser-perl xfonts-utils xsltproc default-jre \
+            uuid-runtime pigz qemu-user-binfmt
+
+      - name: Clone CoreELEC 22
+        run: |
+          git clone --depth=1 --branch coreelec-22 \
+            https://github.com/CoreELEC/CoreELEC.git CoreELEC
+          cd CoreELEC
+          git log -1 --oneline
+
+      - name: Apply Xiaomi reboot fix
+        working-directory: CoreELEC
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("packages/sysutils/busybox/scripts/fs-resize")
+          s = p.read_text()
+
+          old = "reboot -f &>/dev/null\n"
+
+          new = """sync
+          LOG=${LOG:-/flash/fs-resize.log}
+          echo "$(date -Iseconds) FSRESIZE: before direct busybox reboot" >>$LOG
+          sync
+          /usr/bin/busybox reboot -f >>$LOG 2>&1
+          RC=$?
+          echo "$(date -Iseconds) FSRESIZE: reboot returned rc=$RC" >>$LOG
+          exit 0
+          """
+
+          if s.count(old) != 1:
+              raise SystemExit(
+                  f"Expected one final reboot line, found {s.count(old)}"
+              )
+
+          p.write_text(s.replace(old, new))
+          PY
+
+          grep -n -A8 -B3 \
+            "direct busybox reboot" \
+            packages/sysutils/busybox/scripts/fs-resize
+
+          git diff --check
+
+      - name: Build CoreELEC image
+        working-directory: CoreELEC
+        run: |
+          set -o pipefail
+          PROJECT=Amlogic-ce \
+          DEVICE=Amlogic-no \
+          ARCH=aarch64 \
+          BUILD_PERIODIC=nightly \
+          SUBDEVICE=Generic \
+          DTBIMG=s7d_s905x5m_xiaomi_3rd_gen.dtb \
+          CONCURRENCY_MAKE_LEVEL=4 \
+          make image 2>&1 | tee ../build.log
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoreELEC-22-Xiaomi-reboot-fix-${{ github.run_number }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            CoreELEC/target/*.img.gz
+            CoreELEC/target/*.img.gz.sha256
+            CoreELEC/target/*.kernel
+            CoreELEC/target/*.system
+            CoreELEC/packages/sysutils/busybox/scripts/fs-resize
+            build.log
