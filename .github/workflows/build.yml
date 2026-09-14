@@ -44,9 +44,9 @@ jobs:
           cd CoreELEC
           git log -1 --oneline
 
-            - name: Fix GNU source mirrors
+      - name: Fix GNU source mirrors
             
-        working-directory: CoreELEC 22
+        working-directory: CoreELEC 22      
         run: |
           set -e
 
