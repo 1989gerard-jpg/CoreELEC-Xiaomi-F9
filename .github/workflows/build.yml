@@ -116,9 +116,7 @@ jobs:
             "direct busybox reboot" \
             packages/sysutils/busybox/scripts/fs-resize
 
-          git diff --check
-
-concurrency:
+          git diff --checkconcurrency:
 
       - name: Build CoreELEC image
         working-directory: CoreELEC
