@@ -64,9 +64,10 @@ jobs:
             exit 1
           fi
 
-      - name: Fix m4 source
-          working-directory: CoreELEC
-          run: |
+                    - name: Fix m4 source
+                      working-directory: CoreELEC
+                      run: |
+                       
             echo "Searching m4 package..."
             find packages -path '*m4*' -name 'package.mk' -print
 
