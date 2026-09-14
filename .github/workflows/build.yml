@@ -46,7 +46,7 @@ jobs:
 
             - name: Fix GNU source mirrors
             
-        working-directory: CoreELEC
+        working-directory: CoreELEC 22
         run: |
           set -e
 
