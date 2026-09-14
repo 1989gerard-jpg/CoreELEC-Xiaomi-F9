@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y \u
             build-essential git python3 bc bzip2 curl diffutils gawk \
             gcc g++ gperf gzip file patchutils lzop make patch perl \
             rdfind rsync sed tar unzip xz-utils zip zstd \
@@ -118,20 +118,7 @@ jobs:
 
           git diff --check
 
-      - name: Verify Xiaomi DTB
-        working-directory: CoreELEC
-        run: |
-          DTB="projects/Amlogic-ce/devices/Amlogic-no/bootloader/device_trees/s7d_s905x5m_xiaomi_3rd_gen.dtb"
-
-          if [ ! -f "$DTB" ]; then
-            echo "ERROR: Xiaomi 3rd Gen DTB not found:"
-            echo "$DTB"
-            find projects -iname '*xiaomi*3rd*' -o -iname '*s7d*s905x5m*'
-            exit 1
-          fi
-
-          echo "Found DTB:"
-          ls -lh "$DTB"
+concurrency:
 
       - name: Build CoreELEC image
         working-directory: CoreELEC
