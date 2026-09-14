@@ -1,0 +1,215 @@
+name: Build CoreELEC Xiaomi F9
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Free disk space
+        run: |
+          set -e
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/local/share/powershell
+          sudo rm -rf /usr/share/dotnet /opt/ghc
+          df -h
+
+      - name: Install dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex gawk git \
+            gperf libncurses5-dev libssl-dev lzop patch python3 \
+            rsync unzip wget xz-utils zip             xfonts-utils rdfind libparse-yapp-perl xsltproc             libxml-parser-perl patchutils
+
+      - name: Clone CoreELEC 22
+        run: |
+          set -e
+          git clone --depth=1 --branch coreelec-22 \
+            https://github.com/CoreELEC/CoreELEC.git CoreELEC
+          cd CoreELEC
+          git log -1 --oneline
+
+      # The cache is restored AFTER git clone because the cache contains
+      # directories below CoreELEC/. Restoring it before clone breaks git clone.
+      - name: Restore CoreELEC cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            CoreELEC/sources
+            CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22
+            ~/.ccache
+          key: coreelec-22-v4-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            coreelec-22-v4-${{ runner.os }}-
+            coreelec-22-v3-${{ runner.os }}-
+            coreelec-22-v2-${{ runner.os }}-
+
+      - name: Fix GNU source mirrors
+        working-directory: CoreELEC
+        shell: bash
+        run: |
+          set -e
+
+          # Redirect unavailable ftpmirror.gnu.org URLs to the official GNU FTP.
+          grep -RIl 'https://ftpmirror.gnu.org/' packages projects 2>/dev/null | while read -r file; do
+            echo "Patching GNU mirror: $file"
+            sed -i 's#https://ftpmirror.gnu.org/#https://ftp.gnu.org/gnu/#g' "$file"
+          done
+
+          # GMP: use the official GNU archive.
+          GMPPKG="packages/devel/gmp/package.mk"
+          test -f "$GMPPKG"
+
+          sed -i \
+            's#https://gmplib.org/download/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz#https://ftp.gnu.org/gnu/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz#g' \
+            "$GMPPKG"
+
+          echo "GMP package:"
+          grep -E 'PKG_(NAME|VERSION|SHA256|URL)=' "$GMPPKG"
+
+      - name: Fix m4 source
+        working-directory: CoreELEC
+        shell: bash
+        run: |
+          set -e
+
+          M4PKG="$(find packages -path '*m4*' -name 'package.mk' | head -n1)"
+          test -n "$M4PKG"
+          echo "m4 package: $M4PKG"
+
+          # IMPORTANT:
+          # Fix GNU mirrors may already have changed PKG_URL from ftpmirror
+          # to ftp.gnu.org, so do NOT match the old URL here. Set the two
+          # package variables directly.
+          sed -i \
+            's#^PKG_URL=.*#PKG_URL="https://ftp.gnu.org/gnu/m4/${PKG_NAME}-${PKG_VERSION}.tar.xz"#' \
+            "$M4PKG"
+
+          sed -i \
+            's#^PKG_SHA256=.*#PKG_SHA256="f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66"#' \
+            "$M4PKG"
+
+          mkdir -p sources/m4
+          M4FILE="sources/m4/m4-1.4.21.tar.xz"
+          M4SHA="f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66"
+
+          if [ ! -f "$M4FILE" ]; then
+            echo "Downloading official GNU m4..."
+            curl -L --retry 8 --retry-delay 3 --connect-timeout 20 --fail \
+              -o "$M4FILE" \
+              "https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz"
+          fi
+
+          echo "$M4SHA  $M4FILE" | sha256sum -c -
+
+          echo "Final m4 package:"
+          grep -E 'PKG_(NAME|VERSION|SHA256|URL)=' "$M4PKG"
+
+      - name: Apply Xiaomi first-boot reboot fix
+        working-directory: CoreELEC
+        shell: bash
+        run: |
+          set -e
+
+          FS="$(find packages -path '*fs-resize*' -type f -name 'fs-resize' | head -n1 || true)"
+          if [ -z "$FS" ]; then
+            FS="$(find . -type f -name 'fs-resize' | head -n1 || true)"
+          fi
+
+          if [ -z "$FS" ]; then
+            echo "ERROR: fs-resize script not found"
+            exit 1
+          fi
+
+          echo "Patching: $FS"
+
+          python3 - "$FS" <<'PY'
+          import sys
+          from pathlib import Path
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+
+          old = "reboot -f"
+          if old not in s:
+              print("ERROR: expected 'reboot -f' was not found")
+              print("\n".join(s.splitlines()[-60:]))
+              raise SystemExit(1)
+
+          new = """sync
+          echo "$(date -Iseconds) FSRESIZE: before direct busybox reboot" >> /storage/.config/fs-resize.log
+          /usr/bin/busybox reboot -f
+          RC=$?
+          echo "$(date -Iseconds) FSRESIZE: reboot returned rc=$RC" >> /storage/.config/fs-resize.log
+          exit 0"""
+
+          pos = s.rfind(old)
+          p.write_text(s[:pos] + new + s[pos + len(old):])
+          PY
+
+          grep -n -A8 -B4 "busybox reboot" "$FS"
+
+      - name: Verify build dependencies
+        working-directory: CoreELEC
+        shell: bash
+        run: |
+          set -e
+          echo "=== Verifying CoreELEC host dependencies ==="
+          for cmd in mkfontdir mkfontscale rdfind xsltproc bdftopcf lsdiff; do
+            command -v "$cmd"
+          done
+          perl -MParse::Yapp::Driver -e 'print "Parse::Yapp::Driver OK\n"'
+          perl -MXML::Parser -e 'print "XML::Parser OK\n"'
+          echo "All required host tools are present."
+
+      - name: Build CoreELEC image
+        working-directory: CoreELEC
+        shell: bash
+        run: |
+          set -e
+
+          # CoreELEC 22 Amlogic-no uses the Amlogic-ce project
+          # with the Amlogic-no device target.
+          PROJECT=Amlogic-ce \
+          DEVICE=Amlogic-no \
+          ARCH=aarch64 \
+          make image
+
+      # Save intermediate work even when the build fails.
+      # The next run restores the newest cache using restore-keys.
+      - name: Save CoreELEC cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            CoreELEC/sources
+            CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22
+            ~/.ccache
+          key: coreelec-22-v4-${{ runner.os }}-${{ github.run_id }}
+
+      - name: Find build artifacts
+        if: always()
+        run: |
+          echo "=== CoreELEC artifacts ==="
+          find CoreELEC/target -maxdepth 2 -type f \
+            \( -name '*.img.gz' -o -name '*.zip' -o -name '*.tar' \) \
+            -printf '%p %s bytes\n' 2>/dev/null || true
+
+      - name: Upload CoreELEC artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoreELEC-Xiaomi-F9
+          path: |
+            CoreELEC/target/*.img.gz
+            CoreELEC/target/*.zip
+            CoreELEC/target/*.tar
+          if-no-files-found: warn
