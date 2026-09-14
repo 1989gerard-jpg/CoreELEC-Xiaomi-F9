@@ -45,6 +45,43 @@ jobs:
           cd CoreELEC
           git log -1 --oneline
 
+                  - name: Fix m4 source
+          working-directory: CoreELEC
+          run: |
+            echo "Searching m4 package..."
+            find packages -path '*m4*' -name 'package.mk' -print
+
+            M4PKG="$(find packages -path '*m4*' -name 'package.mk' | head -n1)"
+
+            if [ -z "$M4PKG" ]; then
+              echo "ERROR: m4 package.mk not found"
+              exit 1
+            fi
+
+            echo "Using: $M4PKG"
+
+            sed -i \
+              's#https://ftpmirror.gnu.org/m4/m4-1.4.21.tar.bz2#https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz#g' \
+              "$M4PKG"
+
+            echo "Updated m4 package:"
+            cat "$M4PKG"
+
+            echo "Testing GNU m4 source..."
+            curl -fL --retry 5 --retry-delay 3 \
+              -o /tmp/m4-1.4.21.tar.xz \
+              https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz
+
+            echo "SHA256:"
+            sha256sum /tmp/m4-1.4.21.tar.xz
+
+            echo "Expected:"
+            echo "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66"
+
+            echo "Verifying checksum..."
+            echo "f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66  /tmp/m4-1.4.21.tar.xz" \
+              | sha256sum -c -
+
       - name: Apply Xiaomi reboot fix
         working-directory: CoreELEC
         run: |
