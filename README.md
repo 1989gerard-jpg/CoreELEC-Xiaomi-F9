@@ -1,2 +1,2 @@
-# CoreELEC-Xiaomi-F9
+# CoreELEC-Xiaomi-3rd_gen_firstRunRebootFix
 CoreELEC_22_reboot_fix
