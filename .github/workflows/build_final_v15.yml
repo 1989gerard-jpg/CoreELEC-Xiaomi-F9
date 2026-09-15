@@ -1,0 +1,324 @@
+name: Build CoreELEC Xiaomi F9
+on:
+  workflow_dispatch: null
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Free disk space
+      run: 'set -e
+
+        df -h
+
+        sudo rm -rf /usr/local/lib/android /usr/local/share/powershell
+
+        sudo rm -rf /usr/share/dotnet /opt/ghc
+
+        df -h
+
+        '
+    - name: Install dependencies
+      run: "set -e\nsudo apt-get update\nsudo apt-get install -y \\\n  bc bison build-essential\
+        \ ccache curl flex gawk git \\\n  gperf libncurses5-dev libssl-dev lzop patch\
+        \ python3 \\\n  rsync unzip wget xz-utils zip \\\n  xfonts-utils rdfind libparse-yapp-perl\
+        \ xsltproc \\\n  libxml-parser-perl patchutils\n"
+    - name: Clone CoreELEC 22
+      run: "set -e\ngit clone --depth=1 --branch coreelec-22 \\\n  https://github.com/CoreELEC/CoreELEC.git\
+        \ CoreELEC\ncd CoreELEC\ngit log -1 --oneline\necho \"CORELEC_SHA=$(git rev-parse\
+        \ HEAD)\" >> \"$GITHUB_ENV\"\n"
+    - name: Restore CoreELEC source cache
+      id: cache-sources
+      uses: actions/cache/restore@v4
+      with:
+        path: 'CoreELEC/sources
+
+          ~/.ccache
+
+          '
+        key: coreelec-22-sources-v15-${{ runner.os }}-${{ env.CORELEC_SHA }}
+        restore-keys: 'coreelec-22-sources-v15-${{ runner.os }}-
+
+          coreelec-22-sources-v6-${{ runner.os }}-
+
+          coreelec-22-sources-v5-${{ runner.os }}-
+
+          '
+    - name: Restore exact CoreELEC build cache
+      id: cache-build
+      uses: actions/cache/restore@v4
+      with:
+        path: CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22
+        key: coreelec-22-build-v15-${{ runner.os }}-${{ env.CORELEC_SHA }}
+    - name: Fix GNU source mirrors
+      working-directory: CoreELEC
+      shell: bash
+      run: "set -e\n\n# Redirect only the unavailable GNU mirror hostname.\n# Do this\
+        \ safely even when there are no matches.\nwhile IFS= read -r -d '' file; do\n\
+        \  echo \"Patching GNU mirror: $file\"\n  sed -i \\\n    -e 's#https://ftpmirror.gnu.org/gnu/#https://ftp.gnu.org/gnu/#g'\
+        \ \\\n    -e 's#https://ftpmirror.gnu.org/#https://ftp.gnu.org/gnu/#g' \\\n\
+        \    \"$file\"\ndone < <(\n  grep -RIlZ 'https://ftpmirror.gnu.org/' packages\
+        \ projects 2>/dev/null || true\n)\n\n# Remove an accidental duplicate path\
+        \ if an older cached package\n# file or previous workflow produced it.\nwhile\
+        \ IFS= read -r -d '' file; do\n  echo \"Normalizing duplicate GNU path: $file\"\
+        \n  sed -i 's#https://ftp.gnu.org/gnu/gnu/#https://ftp.gnu.org/gnu/#g' \"\
+        $file\"\ndone < <(\n  grep -RIlZ 'https://ftp.gnu.org/gnu/gnu/' packages projects\
+        \ 2>/dev/null || true\n)\n\nGMPPKG=\"packages/devel/gmp/package.mk\"\ntest\
+        \ -f \"$GMPPKG\"\n\nsed -i \\\n  's#^PKG_URL=.*#PKG_URL=\"https://ftp.gnu.org/gnu/gmp/${PKG_NAME}-${PKG_VERSION}.tar.xz\"\
+        #' \\\n  \"$GMPPKG\"\n\necho \"GMP:\"\ngrep -E '^PKG_(NAME|VERSION|SHA256|URL)='\
+        \ \"$GMPPKG\"\n"
+    - name: Fix m4 source
+      working-directory: CoreELEC
+      shell: bash
+      run: "set -e\n\nM4PKG=\"$(find packages -path '*m4*' -name 'package.mk' | head\
+        \ -n1)\"\ntest -n \"$M4PKG\"\n\nsed -i \\\n  's#^PKG_URL=.*#PKG_URL=\"https://ftp.gnu.org/gnu/m4/${PKG_NAME}-${PKG_VERSION}.tar.xz\"\
+        #' \\\n  \"$M4PKG\"\n\nsed -i \\\n  's#^PKG_SHA256=.*#PKG_SHA256=\"f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66\"\
+        #' \\\n  \"$M4PKG\"\n\nmkdir -p sources/m4\nM4FILE=\"sources/m4/m4-1.4.21.tar.xz\"\
+        \nM4SHA=\"f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66\"\
+        \n\nif [ ! -f \"$M4FILE\" ]; then\n  curl -L --retry 8 --retry-delay 3 --connect-timeout\
+        \ 20 --fail \\\n    -o \"$M4FILE\" \\\n    \"https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz\"\
+        \nfi\n\necho \"$M4SHA  $M4FILE\" | sha256sum -c -\n\necho \"m4:\"\ngrep -E\
+        \ '^PKG_(NAME|VERSION|SHA256|URL)=' \"$M4PKG\"\n"
+    - name: Fix GCC source
+      working-directory: CoreELEC
+      shell: bash
+      run: "set -e\n\nGCCPKG=\"packages/lang/gcc/package.mk\"\ntest -f \"$GCCPKG\"\
+        \n\nGCCFILE=\"sources/gcc/gcc-16.2.0.tar.xz\"\nGCCURL=\"https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz\"\
+        \nGCCSHA=\"e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e\"\
+        \n\nsed -i \\\n  's#^PKG_URL=.*#PKG_URL=\"https://ftp.gnu.org/gnu/gcc/${PKG_NAME}-${PKG_VERSION}/${PKG_NAME}-${PKG_VERSION}.tar.xz\"\
+        #' \\\n  \"$GCCPKG\"\n\nsed -i \\\n  's#^PKG_SHA256=.*#PKG_SHA256=\"e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e\"\
+        #' \\\n  \"$GCCPKG\"\n\nmkdir -p sources/gcc\n\nif [ ! -f \"$GCCFILE\" ];\
+        \ then\n  curl -L --retry 8 --retry-delay 3 --connect-timeout 20 --fail \\\
+        \n    -o \"$GCCFILE\" \"$GCCURL\"\nfi\n\necho \"$GCCSHA  $GCCFILE\" | sha256sum\
+        \ -c -\n\necho \"GCC:\"\ngrep -E '^PKG_(NAME|VERSION|SHA256|URL)=' \"$GCCPKG\"\
+        \n"
+    - name: Verify host dependencies
+      working-directory: CoreELEC
+      shell: bash
+      run: "set -e\nfor cmd in mkfontdir mkfontscale rdfind xsltproc bdftopcf lsdiff;\
+        \ do\n  command -v \"$cmd\"\ndone\nperl -MParse::Yapp::Driver -e 'print \"\
+        Parse::Yapp::Driver OK\\n\"'\nperl -MXML::Parser -e 'print \"XML::Parser OK\\\
+        n\"'\necho \"All host dependencies: OK\"\n"
+    - name: Apply Xiaomi first-boot reboot fix
+      working-directory: CoreELEC
+      shell: bash
+      run: "set -e\n\nFS=\"$(find packages -path '*fs-resize*' -type f -name 'fs-resize'\
+        \ | head -n1 || true)\"\nif [ -z \"$FS\" ]; then\n  FS=\"$(find . -type f\
+        \ -name 'fs-resize' | head -n1 || true)\"\nfi\ntest -n \"$FS\"\n\npython3\
+        \ - \"$FS\" <<'PY'\nimport sys\nfrom pathlib import Path\n\np = Path(sys.argv[1])\n\
+        s = p.read_text()\n\nold = \"reboot -f\"\nif old not in s:\n    print(\"ERROR:\
+        \ expected 'reboot -f' not found\")\n    print(\"\\n\".join(s.splitlines()[-60:]))\n\
+        \    raise SystemExit(1)\n\nnew = \"\"\"sync\necho \"$(date -Iseconds) FSRESIZE:\
+        \ before direct busybox reboot\" >> /storage/.config/fs-resize.log\n/usr/bin/busybox\
+        \ reboot -f\nRC=$?\necho \"$(date -Iseconds) FSRESIZE: reboot returned rc=$RC\"\
+        \ >> /storage/.config/fs-resize.log\nexit 0\"\"\"\n\npos = s.rfind(old)\n\
+        p.write_text(s[:pos] + new + s[pos + len(old):])\nPY\n\ngrep -n -A8 -B4 \"\
+        busybox reboot\" \"$FS\"\n"
+    - name: Fix Android Clang source
+      working-directory: CoreELEC
+      shell: bash
+      run: "set -euo pipefail\n\nCLANGPKG=\"projects/Amlogic-ce/packages/lang/clang/package.mk\"\
+        \nCLANGDIR=\"sources/clang\"\nCLANGFILE=\"${CLANGDIR}/clang-r487747c.tar.gz\"\
+        \nCLANGTMP=\"${CLANGFILE}.part\"\nCLANGURL=\"https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-14.0.0_r0.118/clang-r487747c.tar.gz\"\
+        \n\n# The previous run received only ~232 MiB of a ~688 MiB archive and cached\
+        \ it.\n# Never trust an existing archive here: validate it before the build\
+        \ and resume\n# incomplete downloads until gzip/tar can read the complete\
+        \ archive.\nmkdir -p \"$CLANGDIR\"\nrm -f \"$CLANGFILE\"\n\nfor attempt in\
+        \ $(seq 1 12); do\n  echo \"=== Clang download/validation attempt ${attempt}/12\
+        \ ===\"\n\n  if [ -f \"$CLANGTMP\" ]; then\n    echo \"Resuming existing partial\
+        \ download: $(du -h \"$CLANGTMP\" | cut -f1)\"\n  else\n    echo \"Starting\
+        \ fresh Clang download\"\n  fi\n\n  # -C - resumes from the existing partial\
+        \ file. --retry-all-errors handles\n  # transient AOSP/network failures without\
+        \ accepting a partial HTTP response.\n  if curl -L --fail --show-error --http1.1\
+        \ \\\n      --retry 8 --retry-all-errors --retry-delay 5 \\\n      --connect-timeout\
+        \ 30 --max-time 0 -C - \\\n      -o \"$CLANGTMP\" \"$CLANGURL\"; then\n  \
+        \  :\n  else\n    echo \"curl returned non-zero; retaining partial file for\
+        \ the next attempt\"\n  fi\n\n  if [ -s \"$CLANGTMP\" ] && gzip -t \"$CLANGTMP\"\
+        \ 2>/dev/null && tar -tzf \"$CLANGTMP\" >/dev/null 2>&1; then\n    echo \"\
+        Clang archive integrity: OK\"\n    mv -f \"$CLANGTMP\" \"$CLANGFILE\"\n  \
+        \  break\n  fi\n\n  echo \"Clang archive is still incomplete/corrupt; retrying\
+        \ with resume...\"\n  sleep 5\ndone\n\n[ -f \"$CLANGFILE\" ]\ngzip -t \"$CLANGFILE\"\
+        \ntar -tzf \"$CLANGFILE\" >/dev/null\nsha256sum \"$CLANGFILE\"\nls -lh \"\
+        $CLANGFILE\"\n\necho \"Clang package:\" \ngrep -E '^PKG_(NAME|VERSION|SHA256|URL)='\
+        \ \"$CLANGPKG\"\n"
+    - name: Preflight Clang host package
+      working-directory: CoreELEC
+      shell: bash
+      run: 'set -euo pipefail
+
+        rm -rf build.CoreELEC-Amlogic-no.aarch64-22/toolchain/lib/clang 2>/dev/null
+        || true
+
+        ./scripts/build clang:host
+
+        '
+    - name: Fix CMake source
+      working-directory: CoreELEC
+      run: "set -euo pipefail\n\nCMPKG=\"$(find packages -path '*cmake*' -name 'package.mk'\
+        \ | head -n1)\"\nif [ -z \"$CMPKG\" ]; then\n  echo \"ERROR: cmake package.mk\
+        \ not found\"\n  find packages -path '*cmake*' -name 'package.mk' -print\n\
+        \  exit 1\nfi\n\necho \"Using: $CMPKG\"\ngrep -nE 'PKG_(NAME|VERSION|SHA256|URL)'\
+        \ \"$CMPKG\" || true\n\n# CoreELEC currently requests CMake 4.4.3. The configured\
+        \ mirrors\n# return 404 in this runner and cmake.org rejects the request with\
+        \ 403.\n# Use the official Kitware GitHub release asset instead.\n# PKG_URL\
+        \ is generated from get_pkg_version_maj_min(), so replacing\n# a literal URL\
+        \ does not work. Force the package URL itself.\nsed -i \\\n  's#^PKG_URL=.*#PKG_URL=\"\
+        https://github.com/Kitware/CMake/releases/download/v${PKG_VERSION}/cmake-${PKG_VERSION}.tar.gz\"\
+        #' \\\n  \"$CMPKG\"\nsed -i \\\n  's#http://sources.coreelec.org/cmake/cmake-4.4.3.tar.gz#https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3.tar.gz#g'\
+        \ \\\n  \"$CMPKG\"\nsed -i \\\n  's#http://sources.libreelec.tv/mirror/cmake/cmake-4.4.3.tar.gz#https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3.tar.gz#g'\
+        \ \\\n  \"$CMPKG\"\n\necho \"Testing CMake source URL...\"\ncurl -fL --retry\
+        \ 8 --retry-delay 3 \\\n  -o /tmp/cmake-4.4.3.tar.gz \\\n  https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3.tar.gz\n\
+        \nSHA=\"$(sha256sum /tmp/cmake-4.4.3.tar.gz | awk '{print $1}')\"\necho \"\
+        CMake 4.4.3 SHA256: $SHA\"\n\n# Put the verified archive into the CoreELEC\
+        \ source cache using the\n# filename expected by the package.\nmkdir -p sources/cmake\n\
+        rm -f \"sources/cmake-4.4.3.tar.gz\"\ncp -f /tmp/cmake-4.4.3.tar.gz \"sources/cmake/cmake-4.4.3.tar.gz\"\
+        \necho \"CMake cached source:\"\nls -lh \"sources/cmake/cmake-4.4.3.tar.gz\"\
+        \necho \"c46400618b4f1f2b43507f24fb22f3ae830c3416cf23b776e16e1d413aa892f0\
+        \  sources/cmake/cmake-4.4.3.tar.gz\" | sha256sum -c -\n\necho \"Final CMake\
+        \ package:\"\ngrep -nE 'PKG_(NAME|VERSION|SHA256|URL)' \"$CMPKG\" || true\n"
+    - name: Preflight CMake host package
+      working-directory: CoreELEC
+      shell: bash
+      run: 'set -euo pipefail
+
+        echo "=== CMake package preflight ==="
+
+        grep -nE ''PKG_(NAME|VERSION|SHA256|URL)'' packages/devel/cmake/package.mk
+
+        test -f sources/cmake/cmake-4.4.3.tar.gz
+
+        echo "c46400618b4f1f2b43507f24fb22f3ae830c3416cf23b776e16e1d413aa892f0  sources/cmake/cmake-4.4.3.tar.gz"
+        | sha256sum -c -
+
+        ./scripts/build cmake:host
+
+        echo "CMake host preflight: OK"
+
+        '
+    - name: Fix host make and ccache CPU portability
+      working-directory: CoreELEC
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        MAKEPKG="packages/devel/make/package.mk"
+        CCACHEPKG="packages/devel/ccache/package.mk"
+        test -f "$MAKEPKG"
+        test -f "$CCACHEPKG"
+
+        # The previous SIGILL occurred when CoreELEC executed its own host
+        # GNU make. CoreELEC enables +local-cc for make, so force this host
+        # package to be compiled with portable x86-64 flags.
+        cat >> "$MAKEPKG" <<'EOF'
+
+        pre_configure_host() {
+          export CFLAGS="-O2 -pipe -march=x86-64 -mtune=generic"
+          export CXXFLAGS="-O2 -pipe -march=x86-64 -mtune=generic"
+        }
+        EOF
+
+        # Keep +local-cc for ccache: without it CoreELEC expects host-gcc and
+        # host-g++ wrappers that ccache itself creates only after installation.
+        # Instead explicitly use the runner's system GCC/G++.
+        sed -i \
+          's#^PKG_BUILD_FLAGS=.*#PKG_BUILD_FLAGS="+local-cc"#' \
+          "$CCACHEPKG"
+
+        cat >> "$CCACHEPKG" <<'EOF'
+
+        pre_configure_host() {
+          export CC=/usr/bin/gcc
+          export CXX=/usr/bin/g++
+          export CFLAGS="-O2 -pipe -march=x86-64 -mtune=generic"
+          export CXXFLAGS="-O2 -pipe -march=x86-64 -mtune=generic"
+        }
+        EOF
+
+        echo "Host make package:"
+        grep -E '^PKG_(NAME|VERSION|BUILD_FLAGS)=' "$MAKEPKG"
+        echo "ccache package:"
+        grep -E '^PKG_(NAME|VERSION|BUILD_FLAGS)=' "$CCACHEPKG"
+
+        # The exact build cache can contain a make binary produced by an
+        # earlier runner. Remove only make's host stamp/build/install so it is
+        # rebuilt on this runner with the portable flags above.
+        BUILDROOT="$(find . -maxdepth 1 -type d -name 'build.*' | head -n1)"
+        test -n "$BUILDROOT"
+        find "$BUILDROOT" -type f -path '*/stamps/make/build_host' -delete 2>/dev/null || true
+        find "$BUILDROOT" -type f -path '*/stamps/make/*' -delete 2>/dev/null || true
+        rm -rf "$BUILDROOT/build/make-4.4.1"
+        rm -f "$BUILDROOT/toolchain/bin/make" "$BUILDROOT/toolchain/bin/gmake"
+
+        echo "Rebuilding host make with portable CPU flags..."
+        ./scripts/build make:host
+
+        test -x "$BUILDROOT/toolchain/bin/make"
+        "$BUILDROOT/toolchain/bin/make" --version | head -n 2
+        echo "Portable host make: OK"
+
+    - name: Preflight ccache host package
+      working-directory: CoreELEC
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "=== ccache package preflight ==="
+        grep -nE 'PKG_(NAME|VERSION|SHA256|URL|BUILD_FLAGS)' packages/devel/ccache/package.mk
+        BUILDROOT="$(find . -maxdepth 1 -type d -name 'build.*' | head -n1)"
+        test -x "$BUILDROOT/toolchain/bin/make"
+        "$BUILDROOT/toolchain/bin/make" --version | head -n 2
+        test -x /usr/bin/gcc
+        test -x /usr/bin/g++
+        ./scripts/build ccache:host
+        test -x "$BUILDROOT/toolchain/bin/ccache"
+        "$BUILDROOT/toolchain/bin/ccache" --version | head -n 2
+        echo "ccache host preflight: OK"
+
+    - name: Build CoreELEC image
+      working-directory: CoreELEC
+      shell: bash
+      run: 'set -e
+
+        PROJECT=Amlogic-ce \
+
+        DEVICE=Amlogic-no \
+
+        ARCH=aarch64 \
+
+        make image
+
+        '
+    - name: Save source cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: 'CoreELEC/sources
+
+          ~/.ccache
+
+          '
+        key: coreelec-22-sources-v15-${{ runner.os }}-${{ env.CORELEC_SHA }}
+    - name: Save exact build cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: CoreELEC/build.CoreELEC-Amlogic-no.aarch64-22
+        key: coreelec-22-build-v15-${{ runner.os }}-${{ env.CORELEC_SHA }}
+    - name: Find build artifacts
+      if: always()
+      run: "echo \"=== CoreELEC artifacts ===\"\nfind CoreELEC/target -maxdepth 2\
+        \ -type f \\\n  \\( -name '*.img.gz' -o -name '*.zip' -o -name '*.tar' \\\
+        ) \\\n  -printf '%p %s bytes\\n' 2>/dev/null || true\n"
+    - name: Upload CoreELEC artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: CoreELEC-Xiaomi-F9
+        path: 'CoreELEC/target/*.img.gz
+
+          CoreELEC/target/*.zip
+
+          CoreELEC/target/*.tar
+
+          '
+        if-no-files-found: warn
